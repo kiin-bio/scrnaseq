@@ -6,8 +6,11 @@ process DOWNLOAD_FASTQS {
     // Unlike amazon/aws-cli which has 'aws' as entrypoint and can't run bash scripts
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/awscli:1.29.10--pyh7cba7a3_1' :
-        '686255957239.dkr.ecr.eu-west-1.amazonaws.com/nextflow-engine:18f031b1f778b96a5131d6561bb735aec21b9c5f' }"
-    containerOptions = '--entrypoint /bin/bash'
+        '686255957239.dkr.ecr.eu-west-1.amazonaws.com/downloadfastq:latest' }"
+
+    env AWS_ACCESS_KEY_ID, "$AWS_ACCESS_KEY_ID" 
+    env AWS_SECRET_ACCESS_KEY, "$AWS_SECRET_ACCESS_KEY"
+    env AWS_DEFAULT_REGION, 'eu-west-1'
 
     input:
     tuple val(meta), val(reads)
