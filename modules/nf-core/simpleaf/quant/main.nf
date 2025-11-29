@@ -12,7 +12,7 @@ process SIMPLEAF_QUANT {
     // Input reads are expected to come as: [ meta, [ pair1_read1, pair1_read2, pair2_read1, pair2_read2 ] ]
     // Input array for a sample is created in the same order reads appear in samplesheet as pairs from replicates are appended to array.
     //
-    tuple val(meta), val(chemistry), path(reads)                        // chemistry and reads
+    tuple val(meta), val(chemistry), val(reads)                         // chemistry and reads (val for lazy download)
     tuple val(meta2), path(index), path(txp2gene)                       // index and t2g mapping
     tuple val(meta3), val(cell_filter), val(number_cb), path(cb_list)   // cell filtering strategy
     val resolution                                                      // UMI resolution
@@ -30,17 +30,73 @@ process SIMPLEAF_QUANT {
     def args      = task.ext.args ?: ''
     prefix    = task.ext.prefix ?: "${meta.id}"
 
-    // The first required input is either a mapping result directory, or the reads and index files for mapping.
-    mapping_args = mappingArgs(chemistry, reads, index, txp2gene, map_dir)
-
     // The second required input is a cell filtering strategy.
     cf_option = cellFilteringArgs(cell_filter, number_cb, cb_list)
 
     meta = map_dir ? meta4 : meta2 + meta3 + meta
     meta = meta + [ "filtered": cell_filter != "unfiltered-pl" ]
 
-    // separate forward from reverse pairs
+    // Prepare reads for download if provided
+    def reads_list = reads instanceof List ? reads : (reads ? [reads] : [])
+    def reads_str  = reads_list.collect { "\"${it}\"" }.join(' ')
+    def has_reads  = reads_list.size() > 0
+    def t2g_arg    = txp2gene ? "--t2g-map ${txp2gene}" : ""
+
     """
+    # Helper function to download files based on URL type
+    download_file() {
+        local src="\$1"
+        local dest="\$2"
+        
+        if [[ "\$src" == s3://* ]]; then
+            aws s3 cp "\$src" "\$dest" --only-show-errors
+        elif [[ "\$src" == az://* ]] || [[ "\$src" == https://*.blob.core.windows.net/* ]]; then
+            azcopy copy "\$src" "\$dest"
+        elif [[ "\$src" == gs://* ]]; then
+            gsutil cp "\$src" "\$dest"
+        elif [[ "\$src" == http://* ]] || [[ "\$src" == https://* ]]; then
+            curl -sL "\$src" -o "\$dest"
+        elif [[ -f "\$src" ]]; then
+            ln -s "\$src" "\$dest"
+        else
+            echo "ERROR: Cannot access file: \$src" >&2
+            exit 1
+        fi
+    }
+
+    # Build mapping arguments
+    mapping_args=""
+    if [[ -n "${map_dir}" && "${map_dir}" != "[]" ]]; then
+        mapping_args="--map-dir ${map_dir}"
+    elif [[ ${has_reads} == true ]]; then
+        # Download reads to local directory preserving order
+        mkdir -p fastq_dir
+        local_reads=()
+        for read_path in ${reads_str}; do
+            filename=\$(basename "\$read_path")
+            download_file "\$read_path" "fastq_dir/\$filename"
+            local_reads+=("fastq_dir/\$filename")
+        done
+
+        # Separate forward from reverse pairs (reads come as R1,R2,R1,R2,...)
+        forward_reads=""
+        reverse_reads=""
+        for ((i=0; i<\${#local_reads[@]}; i+=2)); do
+            if [ -n "\$forward_reads" ]; then
+                forward_reads="\$forward_reads,\${local_reads[\$i]}"
+                reverse_reads="\$reverse_reads,\${local_reads[\$((i+1))]}"
+            else
+                forward_reads="\${local_reads[\$i]}"
+                reverse_reads="\${local_reads[\$((i+1))]}"
+            fi
+        done
+
+        mapping_args="${t2g_arg} --chemistry ${chemistry} --index ${index} --reads1 \$forward_reads --reads2 \$reverse_reads"
+    else
+        echo "ERROR: Neither reads nor map_dir provided" >&2
+        exit 1
+    fi
+
     # export required var
     export ALEVIN_FRY_HOME=.
 
@@ -49,7 +105,7 @@ process SIMPLEAF_QUANT {
 
     # run simpleaf quant
     simpleaf quant \\
-        $mapping_args \\
+        \$mapping_args \\
         --resolution ${resolution} \\
         --output ${prefix} \\
         --threads ${task.cpus} \\

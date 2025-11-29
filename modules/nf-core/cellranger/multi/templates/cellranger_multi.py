@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Automatically rename staged files for input into cellranger multi and run it.
+Download and rename files for input into cellranger multi and run it.
+Handles S3, GCS, Azure, HTTP, and local file paths.
 
 Copyright (c) Felipe Almeida 2024 - MIT License
 """
@@ -8,13 +9,33 @@ Copyright (c) Felipe Almeida 2024 - MIT License
 from subprocess import run
 from pathlib import Path
 from textwrap import dedent
+from urllib.parse import urlparse
 import shlex
 import re
+import os
 
 
 def chunk_iter(seq, size):
     """iterate over `seq` in chunks of `size`"""
     return (seq[pos : pos + size] for pos in range(0, len(seq), size))
+
+
+def download_file(src: str, dest: Path) -> None:
+    """Download a file from various sources (S3, GCS, Azure, HTTP, or local)."""
+    parsed = urlparse(src)
+    
+    if parsed.scheme == 's3':
+        run(['aws', 's3', 'cp', src, str(dest), '--only-show-errors'], check=True)
+    elif parsed.scheme == 'gs':
+        run(['gsutil', 'cp', src, str(dest)], check=True)
+    elif parsed.scheme in ('az', 'https') and '.blob.core.windows.net' in src:
+        run(['azcopy', 'copy', src, str(dest)], check=True)
+    elif parsed.scheme in ('http', 'https'):
+        run(['curl', '-sL', src, '-o', str(dest)], check=True)
+    elif os.path.isfile(src):
+        os.symlink(src, dest)
+    else:
+        raise ValueError(f"Cannot access file: {src}")
 
 
 sample_id = "${prefix}"
@@ -29,30 +50,61 @@ fastq_all.mkdir(exist_ok=True)
 # do not match "SRR12345", "file_INFIXR12", etc
 filename_pattern = r"([^a-zA-Z0-9])R1([^a-zA-Z0-9])"
 
-for modality in ["gex", "vdj", "ab", "beam", "cmo", "cirspr"]:
-    # get fastqs, ordered by path. Files are staged into
-    #   - "fastq_001/{original_name.fastq.gz}"
-    #   - "fastq_002/{original_name.fastq.gz}"
-    #   - ...
-    # Since we require fastq files in the input channel to be ordered such that a R1/R2 pair
-    # of files follows each other, ordering will get us a sequence of [R1, R2, R1, R2, ...]
-    fastqs = sorted(p for p in Path(".").glob(f"fastqs/{modality}/*/*") if p.name != EMPTY_FILE)
-    assert len(fastqs) % 2 == 0
+# Fastq paths from val inputs (as space-separated quoted strings)
+fastq_inputs = {
+    "gex": """${gex_fastqs_str}""",
+    "vdj": """${vdj_fastqs_str}""",
+    "ab": """${ab_fastqs_str}""",
+    "beam": """${beam_fastqs_str}""",
+    "cmo": """${cmo_fastqs_str}""",
+    "crispr": """${crispr_fastqs_str}""",
+}
+
+for modality, fastqs_str in fastq_inputs.items():
+    # Parse the fastq paths from the string
+    read_paths = shlex.split(fastqs_str) if fastqs_str.strip() else []
+    
+    if not read_paths:
+        continue
+        
+    # Skip if only contains EMPTY placeholder
+    if all(EMPTY_FILE in p for p in read_paths):
+        continue
+    
+    assert len(read_paths) % 2 == 0, f"Expected even number of reads for {modality}, got {len(read_paths)}"
+
+    # Download directory for this modality
+    download_dir = Path(f"./fastq_download/{modality}")
+    download_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Download all files
+    downloaded_files = []
+    for i, read_path in enumerate(read_paths):
+        filename = Path(read_path).name
+        dest = download_dir / f"{i:03d}_{filename}"
+        print(f"Downloading {read_path} to {dest}")
+        download_file(read_path, dest)
+        downloaded_files.append(dest)
 
     # target directory in which the renamed fastqs will be placed
     final_dir = fastq_all / modality
     final_dir.mkdir(exist_ok=True)
 
-    for i, (r1, r2) in enumerate(chunk_iter(fastqs, 2), start=1):
+    for i, (r1, r2) in enumerate(chunk_iter(downloaded_files, 2), start=1):
         # will we rename the files or just move it with the same name to
         # the 'fastq_all' directory which is where files are expected?
         if "${skip_renaming}" == "true":  # nf variables are true/false, which are different from Python
-            resolved_name_r1 = r1.name
-            resolved_name_r2 = r2.name
+            # Remove the index prefix we added during download
+            resolved_name_r1 = r1.name.split('_', 1)[1] if '_' in r1.name else r1.name
+            resolved_name_r2 = r2.name.split('_', 1)[1] if '_' in r2.name else r2.name
 
         else:
+            # Get original names without index prefix
+            r1_orig = r1.name.split('_', 1)[1] if '_' in r1.name else r1.name
+            r2_orig = r2.name.split('_', 1)[1] if '_' in r2.name else r2.name
+            
             # double escapes are required because nextflow processes this python 'template'
-            if re.sub(filename_pattern, r"\\1R2\\2", r1.name) != r2.name:
+            if re.sub(filename_pattern, r"\\1R2\\2", r1_orig) != r2_orig:
                 raise AssertionError(
                     dedent(
                         f"""\

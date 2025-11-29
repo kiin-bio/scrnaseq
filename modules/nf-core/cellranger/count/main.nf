@@ -5,7 +5,7 @@ process CELLRANGER_COUNT {
     container "nf-core/cellranger:8.0.0"
 
     input:
-    tuple val(meta), path(reads, stageAs: "fastq_???/*")
+    tuple val(meta), val(reads)
     path  reference
 
     output:
@@ -22,6 +22,8 @@ process CELLRANGER_COUNT {
     }
     args = task.ext.args ?: ''
     prefix = task.ext.prefix ?: "${meta.id}"
+    def reads_list = reads instanceof List ? reads : [reads]
+    def reads_str  = reads_list.collect { "\"${it}\"" }.join(' ')
     template "cellranger_count.py"
 
     stub:

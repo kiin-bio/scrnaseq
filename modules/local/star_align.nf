@@ -17,7 +17,7 @@ process STAR_ALIGN {
     // Input reads are expected to come as: [ meta, [ pair1_read1, pair1_read2, pair2_read1, pair2_read2 ] ]
     // Input array for a sample is created in the same order reads appear in samplesheet as pairs from replicates are appended to array.
     //
-    tuple val(meta), path(reads)
+    tuple val(meta), val(reads)
     tuple val(meta2), path(index)
     path  gtf
     path whitelist
@@ -53,14 +53,57 @@ process STAR_ALIGN {
     def seq_center = meta.seq_center ? "--outSAMattrRGline ID:$prefix 'CN:$meta.seq_center' 'SM:$prefix'" : "--outSAMattrRGline ID:$prefix 'SM:$prefix'"
     def out_sam_type = (args.contains('--outSAMtype')) ? '' : '--outSAMtype BAM Unsorted'
     def mv_unsorted_bam = (args.contains('--outSAMtype BAM Unsorted SortedByCoordinate')) ? "mv ${prefix}.Aligned.out.bam ${prefix}.Aligned.unsort.out.bam" : ''
-    // def read_pair = params.protocol.contains("chromium") ? "${reads[1]} ${reads[0]}" : "${reads[0]} ${reads[1]}" -- commented out to be removed is it is not being used
 
     // default values max percentile for UMI count 0.99 and max to min ratio for UMI count 10 taken from STARsolo usage
     def cell_filter = meta.expected_cells ? "--soloCellFilter CellRanger2.2 $meta.expected_cells 0.99 10" : ''
 
-    // separate forward from reverse pairs
-    def (forward, reverse) = reads.collate(2).transpose()
+    // Prepare reads list for download
+    def reads_list = reads instanceof List ? reads : [reads]
+    def reads_str  = reads_list.collect { "\"${it}\"" }.join(' ')
     """
+    # Helper function to download files based on URL type
+    download_file() {
+        local src="\$1"
+        local dest="\$2"
+        
+        if [[ "\$src" == s3://* ]]; then
+            aws s3 cp "\$src" "\$dest" --only-show-errors
+        elif [[ "\$src" == az://* ]] || [[ "\$src" == https://*.blob.core.windows.net/* ]]; then
+            azcopy copy "\$src" "\$dest"
+        elif [[ "\$src" == gs://* ]]; then
+            gsutil cp "\$src" "\$dest"
+        elif [[ "\$src" == http://* ]] || [[ "\$src" == https://* ]]; then
+            curl -sL "\$src" -o "\$dest"
+        elif [[ -f "\$src" ]]; then
+            ln -s "\$src" "\$dest"
+        else
+            echo "ERROR: Cannot access file: \$src" >&2
+            exit 1
+        fi
+    }
+
+    # Download reads to local directory preserving order
+    mkdir -p fastq_dir
+    local_reads=()
+    for read_path in ${reads_str}; do
+        filename=\$(basename "\$read_path")
+        download_file "\$read_path" "fastq_dir/\$filename"
+        local_reads+=("fastq_dir/\$filename")
+    done
+
+    # Separate forward from reverse pairs (reads come as R1,R2,R1,R2,...)
+    forward_reads=""
+    reverse_reads=""
+    for ((i=0; i<\${#local_reads[@]}; i+=2)); do
+        if [ -n "\$forward_reads" ]; then
+            forward_reads="\$forward_reads,\${local_reads[\$i]}"
+            reverse_reads="\$reverse_reads,\${local_reads[\$((i+1))]}"
+        else
+            forward_reads="\${local_reads[\$i]}"
+            reverse_reads="\${local_reads[\$((i+1))]}"
+        fi
+    done
+
     if [[ $whitelist == *.gz ]]; then
         gzip -cdf $whitelist > whitelist.uncompressed.txt
     else
@@ -69,7 +112,7 @@ process STAR_ALIGN {
 
     STAR \\
         --genomeDir $index \\
-        --readFilesIn ${reverse.join( "," )} ${forward.join( "," )} \\
+        --readFilesIn \$reverse_reads \$forward_reads \\
         --runThreadN $task.cpus \\
         --outFileNamePrefix $prefix. \\
         --soloCBwhitelist whitelist.uncompressed.txt \\

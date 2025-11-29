@@ -10,7 +10,7 @@ process CELLRANGERARC_COUNT {
     }
 
     input:
-    tuple val(meta), val(sample_type), val(sub_sample), path(reads, stageAs: "fastqs/*")
+    tuple val(meta), val(sample_type), val(sub_sample), val(reads)
     path  reference
 
     output:
@@ -27,8 +27,38 @@ process CELLRANGERARC_COUNT {
     def sample_types = sample_type.join(",")
     def sample_names = sub_sample.join(",")
     def lib_csv = meta.id + "_lib.csv"
+    def reads_list = reads instanceof List ? reads : [reads]
+    def reads_str  = reads_list.collect { "\"${it}\"" }.join(' ')
 
     """
+    # Helper function to download files based on URL type
+    download_file() {
+        local src="\$1"
+        local dest="\$2"
+        
+        if [[ "\$src" == s3://* ]]; then
+            aws s3 cp "\$src" "\$dest" --only-show-errors
+        elif [[ "\$src" == az://* ]] || [[ "\$src" == https://*.blob.core.windows.net/* ]]; then
+            azcopy copy "\$src" "\$dest"
+        elif [[ "\$src" == gs://* ]]; then
+            gsutil cp "\$src" "\$dest"
+        elif [[ "\$src" == http://* ]] || [[ "\$src" == https://* ]]; then
+            curl -sL "\$src" -o "\$dest"
+        elif [[ -f "\$src" ]]; then
+            ln -s "\$src" "\$dest"
+        else
+            echo "ERROR: Cannot access file: \$src" >&2
+            exit 1
+        fi
+    }
+
+    # Download reads to local directory
+    mkdir -p fastqs
+    for read_path in ${reads_str}; do
+        filename=\$(basename "\$read_path")
+        download_file "\$read_path" "fastqs/\$filename"
+    done
+
     fastq_folder=\$(readlink -f fastqs)
 
     python3 <<CODE

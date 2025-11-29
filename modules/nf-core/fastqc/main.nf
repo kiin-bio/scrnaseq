@@ -8,7 +8,7 @@ process FASTQC {
         'biocontainers/fastqc:0.12.1--hdfd78af_0' }"
 
     input:
-    tuple val(meta), path(reads)
+    tuple val(meta), val(reads)
 
     output:
     tuple val(meta), path("*.html"), emit: html
@@ -21,10 +21,15 @@ process FASTQC {
     script:
     def args          = task.ext.args ?: ''
     def prefix        = task.ext.prefix ?: "${meta.id}"
-    // Make list of old name and new name pairs to use for renaming in the bash while loop
-    def old_new_pairs = reads instanceof Path || reads.size() == 1 ? [[ reads, "${prefix}.${reads.extension}" ]] : reads.withIndex().collect { entry, index -> [ entry, "${prefix}_${index + 1}.${entry.extension}" ] }
-    def rename_to     = old_new_pairs*.join(' ').join(' ')
-    def renamed_files = old_new_pairs.collect{ _old_name, new_name -> new_name }.join(' ')
+    // Convert reads to list if single file
+    def reads_list    = reads instanceof List ? reads : [reads]
+    def reads_names   = reads_list.withIndex().collect { read, index -> 
+        def basename = read.toString().split('/')[-1]
+        def extension = basename.endsWith('.gz') ? 'fastq.gz' : 'fastq'
+        reads_list.size() == 1 ? "${prefix}.${extension}" : "${prefix}_${index + 1}.${extension}"
+    }
+    def renamed_files = reads_names.join(' ')
+    def reads_str     = reads_list.collect { "\"${it}\"" }.join(' ')
 
     // The total amount of allocated RAM by FastQC is equal to the number of threads defined (--threads) time the amount of RAM defined (--memory)
     // https://github.com/s-andrews/FastQC/blob/1faeea0412093224d7f6a07f777fad60a5650795/fastqc#L211-L222
@@ -34,8 +39,32 @@ process FASTQC {
     def fastqc_memory = memory_in_mb > 10000 ? 10000 : (memory_in_mb < 100 ? 100 : memory_in_mb)
 
     """
-    printf "%s %s\\n" ${rename_to} | while read old_name new_name; do
-        [ -f "\${new_name}" ] || ln -s \$old_name \$new_name
+    # Helper function to download files based on URL type
+    download_file() {
+        local src="\$1"
+        local dest="\$2"
+        
+        if [[ "\$src" == s3://* ]]; then
+            aws s3 cp "\$src" "\$dest" --only-show-errors
+        elif [[ "\$src" == az://* ]] || [[ "\$src" == https://*.blob.core.windows.net/* ]]; then
+            azcopy copy "\$src" "\$dest"
+        elif [[ "\$src" == gs://* ]]; then
+            gsutil cp "\$src" "\$dest"
+        elif [[ "\$src" == http://* ]] || [[ "\$src" == https://* ]]; then
+            curl -sL "\$src" -o "\$dest"
+        elif [[ -f "\$src" ]]; then
+            ln -s "\$src" "\$dest"
+        else
+            echo "ERROR: Cannot access file: \$src" >&2
+            exit 1
+        fi
+    }
+
+    # Download reads to local directory with renamed filenames
+    reads_arr=(${reads_str})
+    names_arr=(${renamed_files})
+    for i in "\${!reads_arr[@]}"; do
+        download_file "\${reads_arr[\$i]}" "\${names_arr[\$i]}"
     done
 
     fastqc \\

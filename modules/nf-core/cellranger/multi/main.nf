@@ -6,12 +6,12 @@ process CELLRANGER_MULTI {
 
     input:
     val meta
-    tuple val(meta_gex)        , path (gex_fastqs   , stageAs: "fastqs/gex/fastq_???/*")
-    tuple val(meta_vdj)        , path (vdj_fastqs   , stageAs: "fastqs/vdj/fastq_???/*")
-    tuple val(meta_ab)         , path (ab_fastqs    , stageAs: "fastqs/ab/fastq_???/*")
-    tuple val(meta_beam)       , path (beam_fastqs  , stageAs: "fastqs/beam/fastq_???/*")
-    tuple val(meta_cmo)        , path (cmo_fastqs   , stageAs: "fastqs/cmo/fastq_???/*")
-    tuple val(meta_crispr)     , path (crispr_fastqs, stageAs: "fastqs/crispr/fastq_???/*")
+    tuple val(meta_gex)        , val(gex_fastqs)
+    tuple val(meta_vdj)        , val(vdj_fastqs)
+    tuple val(meta_ab)         , val(ab_fastqs)
+    tuple val(meta_beam)       , val(beam_fastqs)
+    tuple val(meta_cmo)        , val(cmo_fastqs)
+    tuple val(meta_crispr)     , val(crispr_fastqs)
     path gex_reference         , stageAs: "references/gex/*"
     path gex_frna_probeset     , stageAs: "references/gex/probeset/*"
     path gex_targetpanel       , stageAs: "references/gex/targetpanel/*"
@@ -55,12 +55,28 @@ process CELLRANGER_MULTI {
     cmo_sample_assignment   = cmo_barcode_assignment ? cmo_barcode_assignment.getName() : ''
     beam_antigen_panel_name = beam_antigen_panel     ? beam_antigen_panel.getName()     : ''
 
-    include_gex  = gex_fastqs.first().getName() != 'fastqs' && gex_reference           ? '[gene-expression]'     : ''
-    include_vdj  = vdj_fastqs.first().getName() != 'fastqs' && vdj_reference           ? '[vdj]'                 : ''
-    include_beam = beam_fastqs.first().getName() != 'fastqs' && beam_control_panel     ? '[antigen-specificity]' : ''
-    include_cmo  = cmo_fastqs.first().getName() != 'fastqs' && cmo_barcodes            ? '[samples]'             : ''
-    include_fb   = ab_fastqs.first().getName() != 'fastqs' && fb_reference             ? '[feature]'             : ''
-    include_frna = gex_frna_probeset_name && frna_sampleinfo                           ? '[samples]'             : ''
+    // Check if fastq lists have real data (not empty or just "EMPTY" placeholder)
+    def has_gex_fastqs    = gex_fastqs    && !(gex_fastqs instanceof String && gex_fastqs.contains('EMPTY')) && (gex_fastqs instanceof List ? gex_fastqs.size() > 0 : true)
+    def has_vdj_fastqs    = vdj_fastqs    && !(vdj_fastqs instanceof String && vdj_fastqs.contains('EMPTY')) && (vdj_fastqs instanceof List ? vdj_fastqs.size() > 0 : true)
+    def has_beam_fastqs   = beam_fastqs   && !(beam_fastqs instanceof String && beam_fastqs.contains('EMPTY')) && (beam_fastqs instanceof List ? beam_fastqs.size() > 0 : true)
+    def has_cmo_fastqs    = cmo_fastqs    && !(cmo_fastqs instanceof String && cmo_fastqs.contains('EMPTY')) && (cmo_fastqs instanceof List ? cmo_fastqs.size() > 0 : true)
+    def has_ab_fastqs     = ab_fastqs     && !(ab_fastqs instanceof String && ab_fastqs.contains('EMPTY')) && (ab_fastqs instanceof List ? ab_fastqs.size() > 0 : true)
+    def has_crispr_fastqs = crispr_fastqs && !(crispr_fastqs instanceof String && crispr_fastqs.contains('EMPTY')) && (crispr_fastqs instanceof List ? crispr_fastqs.size() > 0 : true)
+    
+    include_gex  = has_gex_fastqs && gex_reference      ? '[gene-expression]'     : ''
+    include_vdj  = has_vdj_fastqs && vdj_reference      ? '[vdj]'                 : ''
+    include_beam = has_beam_fastqs && beam_control_panel ? '[antigen-specificity]' : ''
+    include_cmo  = has_cmo_fastqs && cmo_barcodes       ? '[samples]'             : ''
+    include_fb   = has_ab_fastqs && fb_reference        ? '[feature]'             : ''
+    include_frna = gex_frna_probeset_name && frna_sampleinfo ? '[samples]'        : ''
+    
+    // Prepare fastq strings for template
+    def gex_fastqs_str    = (gex_fastqs instanceof List ? gex_fastqs : [gex_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
+    def vdj_fastqs_str    = (vdj_fastqs instanceof List ? vdj_fastqs : [vdj_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
+    def ab_fastqs_str     = (ab_fastqs instanceof List ? ab_fastqs : [ab_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
+    def beam_fastqs_str   = (beam_fastqs instanceof List ? beam_fastqs : [beam_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
+    def cmo_fastqs_str    = (cmo_fastqs instanceof List ? cmo_fastqs : [cmo_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
+    def crispr_fastqs_str = (crispr_fastqs instanceof List ? crispr_fastqs : [crispr_fastqs]).findAll { it && !it.toString().contains('EMPTY') }.collect { "\"${it}\"" }.join(' ')
 
     gex_reference_path = include_gex ? "reference,./${gex_reference_name}" : ''
     fb_reference_path  = include_fb  ? "reference,./${fb_reference_name}"  : ''
