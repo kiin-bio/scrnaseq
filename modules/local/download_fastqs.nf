@@ -7,6 +7,7 @@ process DOWNLOAD_FASTQS {
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/awscli:1.29.10--pyh7cba7a3_1' :
         '686255957239.dkr.ecr.eu-west-1.amazonaws.com/nextflow-engine:18f031b1f778b96a5131d6561bb735aec21b9c5f' }"
+    containerOptions = '--entrypoint /bin/bash'
 
     input:
     tuple val(meta), val(reads)
