@@ -40,15 +40,17 @@ workflow SCRNASEQ {
     }
 
     // general input and params
-    ch_genome_fasta         = params.fasta                ? file(params.fasta, checkIfExists: true)    : []
-    ch_gtf                  = params.gtf                  ? file(params.gtf, checkIfExists: true)      : []
-    ch_transcript_fasta     = params.transcript_fasta     ? file(params.transcript_fasta)              : []
-    ch_motifs               = params.motifs               ? file(params.motifs)                        : []
-    ch_txp2gene             = params.txp2gene             ? file(params.txp2gene, checkIfExists: true) : []
+    // Use Channel.fromPath to create lazy references - files are only resolved/downloaded by worker nodes
+    ch_genome_fasta         = params.fasta                ? Channel.fromPath(params.fasta, checkIfExists: true).first()                : Channel.value([])
+    ch_gtf                  = params.gtf                  ? Channel.fromPath(params.gtf, checkIfExists: true).first()                  : Channel.value([])
+    ch_transcript_fasta     = params.transcript_fasta     ? Channel.fromPath(params.transcript_fasta, checkIfExists: true).first()     : Channel.value([])
+    ch_motifs               = params.motifs               ? Channel.fromPath(params.motifs, checkIfExists: true).first()               : Channel.value([])
+    ch_txp2gene             = params.txp2gene             ? Channel.fromPath(params.txp2gene, checkIfExists: true).first()             : Channel.value([])
 
     if (params.barcode_whitelist) {
-        ch_barcode_whitelist = file(params.barcode_whitelist, checkIfExists: true)
+        ch_barcode_whitelist = Channel.fromPath(params.barcode_whitelist, checkIfExists: true).first()
     } else if (protocol_config.containsKey("whitelist")) {
+        // Local project files can use file() since they're not remote
         ch_barcode_whitelist = file("$projectDir/${protocol_config['whitelist']}", checkIfExists: true)
     } else {
         ch_barcode_whitelist = []
@@ -56,30 +58,32 @@ workflow SCRNASEQ {
 
     // samplesheet - this is passed to the MTX conversion functions to add metadata to the
     // AnnData objects.
-    ch_input = file(params.input)
+    ch_input = Channel.fromPath(params.input, checkIfExists: true).first()
 
     //kallisto params
-    ch_kallisto_index = params.kallisto_index ? file(params.kallisto_index, checkIfExists: true) : []
-    kb_t1c            = params.kb_t1c         ? file(params.kb_t1c, checkIfExists: true) : []
-    kb_t2c            = params.kb_t2c         ? file(params.kb_t2c, checkIfExists: true) : []
+    ch_kallisto_index = params.kallisto_index ? Channel.fromPath(params.kallisto_index, checkIfExists: true).first() : Channel.value([])
+    kb_t1c            = params.kb_t1c         ? Channel.fromPath(params.kb_t1c, checkIfExists: true).first()         : Channel.value([])
+    kb_t2c            = params.kb_t2c         ? Channel.fromPath(params.kb_t2c, checkIfExists: true).first()         : Channel.value([])
 
     //simpleaf params
-    ch_simpleaf_index   = params.simpleaf_index ? file(params.simpleaf_index, checkIfExists: true) : []
+    ch_simpleaf_index   = params.simpleaf_index ? Channel.fromPath(params.simpleaf_index, checkIfExists: true).first() : Channel.value([])
 
     //star params
-    star_index        = params.star_index ? file(params.star_index, checkIfExists: true) : null
-    ch_star_index     = star_index ? Channel.value( [[id: star_index.baseName], star_index] ) : []
+    ch_star_index = params.star_index
+        ? Channel.fromPath(params.star_index, checkIfExists: true).first().map { idx -> [[id: idx.baseName], idx] }
+        : Channel.value([])
 
     //cellranger params
-    ch_cellranger_index = params.cellranger_index ? file(params.cellranger_index, checkIfExists: true) : []
+    ch_cellranger_index = params.cellranger_index ? Channel.fromPath(params.cellranger_index, checkIfExists: true).first() : Channel.value([])
 
     //cellrangermulti params
-    cellranger_vdj_index = params.cellranger_vdj_index      ? file(params.cellranger_vdj_index, checkIfExists: true)      : []
-    ch_multi_samplesheet = params.cellranger_multi_barcodes ? file(params.cellranger_multi_barcodes, checkIfExists: true) : []
+    cellranger_vdj_index = params.cellranger_vdj_index      ? Channel.fromPath(params.cellranger_vdj_index, checkIfExists: true).first()      : Channel.value([])
+    ch_multi_samplesheet = params.cellranger_multi_barcodes ? Channel.fromPath(params.cellranger_multi_barcodes, checkIfExists: true).first() : Channel.value([])
+    // Local project files can use file() since they're not remote
     empty_file           = file("$projectDir/assets/EMPTY", checkIfExists: true)
 
     // cellrangerarc params
-    ch_cellrangerarc_config = params.cellrangerarc_config ? file(params.cellrangerarc_config)          : []
+    ch_cellrangerarc_config = params.cellrangerarc_config ? Channel.fromPath(params.cellrangerarc_config, checkIfExists: true).first() : Channel.value([])
 
     // Run FastQC
     if (!params.skip_fastqc) {
@@ -91,29 +95,23 @@ workflow SCRNASEQ {
     //
     // Uncompress genome fasta file if required
     //
-    if (params.fasta) {
-        if (params.fasta.endsWith('.gz')) {
-            ch_genome_fasta    = GUNZIP_FASTA ( [ [:], ch_genome_fasta ] ).gunzip.map { it[1] }
-            ch_versions        = ch_versions.mix(GUNZIP_FASTA.out.versions)
-        } else {
-            ch_genome_fasta = Channel.value( ch_genome_fasta )
-        }
+    if (params.fasta && params.fasta.endsWith('.gz')) {
+        ch_genome_fasta = GUNZIP_FASTA ( ch_genome_fasta.map { [ [:], it ] } ).gunzip.map { it[1] }
+        ch_versions     = ch_versions.mix(GUNZIP_FASTA.out.versions)
     }
+    // else: ch_genome_fasta is already a value channel from Channel.fromPath().first()
 
     //
     // Uncompress GTF annotation file or create from GFF3 if required
     //
-    if (params.gtf) {
-        if (params.gtf.endsWith('.gz')) {
-            ch_gtf      = GUNZIP_GTF ( [ [:], ch_gtf ] ).gunzip.map { it[1] }
-            ch_versions = ch_versions.mix(GUNZIP_GTF.out.versions)
-        } else {
-            ch_gtf = Channel.value( ch_gtf )
-        }
+    if (params.gtf && params.gtf.endsWith('.gz')) {
+        ch_gtf      = GUNZIP_GTF ( ch_gtf.map { [ [:], it ] } ).gunzip.map { it[1] }
+        ch_versions = ch_versions.mix(GUNZIP_GTF.out.versions)
     }
+    // else: ch_gtf is already a value channel from Channel.fromPath().first()
 
     // filter gtf
-    ch_filter_gtf = ch_gtf ? GTF_GENE_FILTER ( ch_genome_fasta, ch_gtf ).gtf : []
+    ch_filter_gtf = params.gtf ? GTF_GENE_FILTER ( ch_genome_fasta, ch_gtf ).gtf : Channel.value([])
 
     // Run kallisto bustools pipeline
     if (params.aligner == "kallisto") {
@@ -283,7 +281,7 @@ workflow SCRNASEQ {
     MTX_TO_H5AD (
         ch_mtx_matrices,
         ch_txp2gene,
-        star_index ? ch_star_index.map{it[1]} : [],
+        params.star_index ? ch_star_index.map{it[1]} : Channel.value([]),
         params.aligner
     )
     ch_versions = ch_versions.mix(MTX_TO_H5AD.out.versions.first())
@@ -341,11 +339,11 @@ workflow SCRNASEQ {
     ch_workflow_summary = Channel.value(paramsSummaryMultiqc(summary_params))
     ch_multiqc_files = ch_multiqc_files.mix(
         ch_workflow_summary.collectFile(name: 'workflow_summary_mqc.yaml'))
-    ch_multiqc_custom_methods_description = params.multiqc_methods_description ?
-        file(params.multiqc_methods_description, checkIfExists: true) :
-        file("$projectDir/assets/methods_description_template.yml", checkIfExists: true)
-    ch_methods_description                = Channel.value(
-        methodsDescriptionText(ch_multiqc_custom_methods_description))
+    // Local project file uses file(), remote files use Channel.fromPath
+    ch_multiqc_custom_methods_description = params.multiqc_methods_description
+        ? Channel.fromPath(params.multiqc_methods_description, checkIfExists: true).first()
+        : Channel.value(file("$projectDir/assets/methods_description_template.yml", checkIfExists: true))
+    ch_methods_description = ch_multiqc_custom_methods_description.map { methodsDescriptionText(it) }
 
     ch_multiqc_files = ch_multiqc_files.mix(ch_collated_versions)
     ch_multiqc_files = ch_multiqc_files.mix(

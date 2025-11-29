@@ -58,14 +58,15 @@ workflow CELLRANGER_MULTI_ALIGN {
         .set { ch_grouped_fastq }
 
         // Assign other cellranger reference files
-        ch_gex_frna_probeset      = params.gex_frna_probe_set            ? file(params.gex_frna_probe_set)            : []
-        ch_gex_target_panel       = params.gex_target_panel              ? file(params.gex_target_panel)              : []
-        ch_gex_cmo_set            = params.gex_cmo_set                   ? file(params.gex_cmo_set)                   : []
-        ch_gex_barcodes           = params.gex_barcode_sample_assignment ? file(params.gex_barcode_sample_assignment) : []
-        ch_fb_reference           = params.fb_reference                  ? file(params.fb_reference)                  : []
-        ch_vdj_primer_index       = params.vdj_inner_enrichment_primers  ? file(params.vdj_inner_enrichment_primers)  : []
-        ch_beam_antigen_panel_csv = [] // currently not implemented
-        ch_beam_control_panel_csv = [] // currently not implemented
+        // Use Channel.fromPath to create lazy references - files are only resolved/downloaded by worker nodes
+        ch_gex_frna_probeset      = params.gex_frna_probe_set            ? Channel.fromPath(params.gex_frna_probe_set, checkIfExists: true).first()            : Channel.value([])
+        ch_gex_target_panel       = params.gex_target_panel              ? Channel.fromPath(params.gex_target_panel, checkIfExists: true).first()              : Channel.value([])
+        ch_gex_cmo_set            = params.gex_cmo_set                   ? Channel.fromPath(params.gex_cmo_set, checkIfExists: true).first()                   : Channel.value([])
+        ch_gex_barcodes           = params.gex_barcode_sample_assignment ? Channel.fromPath(params.gex_barcode_sample_assignment, checkIfExists: true).first() : Channel.value([])
+        ch_fb_reference           = params.fb_reference                  ? Channel.fromPath(params.fb_reference, checkIfExists: true).first()                  : Channel.value([])
+        ch_vdj_primer_index       = params.vdj_inner_enrichment_primers  ? Channel.fromPath(params.vdj_inner_enrichment_primers, checkIfExists: true).first()  : Channel.value([])
+        ch_beam_antigen_panel_csv = Channel.value([]) // currently not implemented
+        ch_beam_control_panel_csv = Channel.value([]) // currently not implemented
 
         // parse frna and barcode information
         if (ch_multi_samplesheet) {
