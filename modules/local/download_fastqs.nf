@@ -2,11 +2,11 @@ process DOWNLOAD_FASTQS {
     tag "$meta.id"
     label 'process_low'
 
-    // Use a minimal container with cloud CLI tools
-    // The nf-core/cellranger container has AWS CLI, or use a dedicated one
+    // Use amazonlinux with AWS CLI v2 pre-installed - has normal shell entrypoint
+    // Unlike amazon/aws-cli which has 'aws' as entrypoint and can't run bash scripts
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/awscli:1.29.10--pyh7cba7a3_1' :
-        'docker.io/amazon/aws-cli:2.32.6' }"
+        '686255957239.dkr.ecr.eu-west-1.amazonaws.com/nextflow-engine:18f031b1f778b96a5131d6561bb735aec21b9c5f' }"
 
     input:
     tuple val(meta), val(reads)
