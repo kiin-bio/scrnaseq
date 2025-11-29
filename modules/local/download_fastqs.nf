@@ -6,7 +6,7 @@ process DOWNLOAD_FASTQS {
     // The nf-core/cellranger container has AWS CLI, or use a dedicated one
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/awscli:1.29.10--pyh7cba7a3_1' :
-        'biocontainers/awscli:1.29.10--pyh7cba7a3_1' }"
+        'docker.io/amazon/aws-cli:2.32.6' }"
 
     input:
     tuple val(meta), val(reads)
