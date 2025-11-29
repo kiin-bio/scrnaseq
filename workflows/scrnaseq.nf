@@ -9,6 +9,7 @@ include { paramsSummaryMultiqc                              } from '../subworkfl
 include { softwareVersionsToYAML                            } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { methodsDescriptionText                            } from '../subworkflows/local/utils_nfcore_scrnaseq_pipeline'
 include { getGenomeAttribute                                } from '../subworkflows/local/utils_nfcore_scrnaseq_pipeline'
+include { DOWNLOAD_FASTQS                                   } from '../modules/local/download_fastqs'
 include { FASTQC_CHECK                                      } from '../subworkflows/local/fastqc'
 include { KALLISTO_BUSTOOLS                                 } from '../subworkflows/local/kallisto_bustools'
 include { SIMPLEAF                                          } from '../subworkflows/local/simpleaf'
@@ -85,9 +86,21 @@ workflow SCRNASEQ {
     // cellrangerarc params
     ch_cellrangerarc_config = params.cellrangerarc_config ? Channel.fromPath(params.cellrangerarc_config, checkIfExists: true).first() : Channel.value([])
 
+    //
+    // Download FASTQ files from cloud storage (S3, GCS, Azure) to worker nodes
+    // This prevents the head node from staging large files
+    //
+    if (params.download_fastqs) {
+        DOWNLOAD_FASTQS ( ch_fastq )
+        ch_fastq_local = DOWNLOAD_FASTQS.out.fastqs
+        ch_versions    = ch_versions.mix(DOWNLOAD_FASTQS.out.versions.first())
+    } else {
+        ch_fastq_local = ch_fastq
+    }
+
     // Run FastQC
     if (!params.skip_fastqc) {
-        FASTQC_CHECK ( ch_fastq )
+        FASTQC_CHECK ( ch_fastq_local )
         ch_versions      = ch_versions.mix(FASTQC_CHECK.out.fastqc_version)
         ch_multiqc_files = ch_multiqc_files.mix(FASTQC_CHECK.out.fastqc_multiqc.flatten())
     }
@@ -124,7 +137,7 @@ workflow SCRNASEQ {
             kb_t2c,
             protocol_config['protocol'],
             params.kb_workflow,
-            ch_fastq
+            ch_fastq_local
         )
         ch_versions = ch_versions.mix(KALLISTO_BUSTOOLS.out.ch_versions)
         ch_mtx_matrices = ch_mtx_matrices.mix( KALLISTO_BUSTOOLS.out.counts_raw, KALLISTO_BUSTOOLS.out.counts_filtered )
@@ -143,7 +156,7 @@ workflow SCRNASEQ {
             ch_barcode_whitelist,
             protocol_config['protocol'],
             params.simpleaf_umi_resolution,
-            ch_fastq,
+            ch_fastq_local,
             [] // for existing map dir; not applicable
         )
         ch_versions = ch_versions.mix(SIMPLEAF.out.ch_versions)
@@ -167,7 +180,7 @@ workflow SCRNASEQ {
             ch_star_index,
             protocol_config['protocol'],
             ch_barcode_whitelist,
-            ch_fastq,
+            ch_fastq_local,
             params.star_feature,
             protocol_config.get('extra_args', ""),
         )
@@ -182,7 +195,7 @@ workflow SCRNASEQ {
             ch_genome_fasta,
             ch_filter_gtf,
             ch_cellranger_index,
-            ch_fastq,
+            ch_fastq_local,
             protocol_config['protocol']
         )
         ch_versions = ch_versions.mix(CELLRANGER_ALIGN.out.ch_versions)
@@ -199,7 +212,7 @@ workflow SCRNASEQ {
             ch_filter_gtf,
             ch_motifs,
             ch_cellranger_index,
-            ch_fastq,
+            ch_fastq_local,
             ch_cellrangerarc_config
         )
         ch_versions = ch_versions.mix(CELLRANGERARC_ALIGN.out.ch_versions)
@@ -212,7 +225,7 @@ workflow SCRNASEQ {
         // parse the input data to generate a collected channel per sample, which will have
         // the metadata and data for each data-type of every sample.
         // then, inside the subworkflow, it can be parsed to manage inputs to the module
-        ch_fastq
+        ch_fastq_local
         .map { meta, fastqs ->
             def parsed_meta = meta.clone() + [ "${meta.feature_type.toString()}": fastqs ]
             parsed_meta.options = [:]

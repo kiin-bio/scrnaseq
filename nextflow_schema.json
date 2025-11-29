@@ -88,6 +88,11 @@
                     "type": "boolean",
                     "description": "Skip FastQC"
                 },
+                "download_fastqs": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Download FASTQ files from cloud storage (S3/GCS/Azure) on worker nodes instead of staging on head node. Disable with --download_fastqs false if FASTQs are local."
+                },
                 "skip_cellbender": {
                     "type": "boolean",
                     "description": "Skip cellbender empty drops filter subworkflow"
